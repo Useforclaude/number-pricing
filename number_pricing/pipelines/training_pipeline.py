@@ -118,8 +118,9 @@ class TrainingPipeline:
             if pbar is not None:
                 pbar.update(1)
                 pbar.set_postfix({"R²": f"{metrics.get('r2', 0):.4f}", "RMSE": f"{metrics.get('rmse', 0):.0f}"})
-
-            LOGGER.info("Fold %s metrics: %s", fold_index, metrics)
+            else:
+                # Only log when no progress bar (to avoid breaking tqdm display)
+                LOGGER.info("Fold %s metrics: %s", fold_index, metrics)
 
             if store_oof and oof_predictions is not None:
                 oof_predictions[val_idx] = predictions
@@ -276,7 +277,7 @@ class TrainingPipeline:
         pbar = tqdm(total=total_steps, desc="Training Progress", unit="fold", ncols=100)
 
         for idx, overrides in enumerate(candidates, start=1):
-            LOGGER.info("Evaluating hyperparameter candidate %s/%s: %s", idx, len(candidates), overrides)
+            # Skip logging here to avoid breaking progress bar display
             pbar.set_description(f"Config {idx}/{len(candidates)}")
 
             summary, _ = self._cross_validate(
