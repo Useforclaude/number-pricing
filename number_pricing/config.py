@@ -11,7 +11,7 @@ Colab, Kaggle, or Paperspace without touching any other source file.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
@@ -117,12 +117,12 @@ class DataSettings:
             "raw_dataset_filename": _resolve_dataset_filename("numberdata.csv"),
             "delimiter": ",",
             "encoding": "utf-8",
-            "id_column": "phone_num",
+            "id_column": "phone_number",
             "target_column": "price",
             "enforce_unique_ids": True,
             "valid_number_lengths": (10,),
             "drop_rows_with_missing_target": True,
-            "dtype_overrides": {"phone_num": "string"},
+            "dtype_overrides": {"phone_number": "string"},
             "cache_intermediate": True,
         }
 
@@ -156,6 +156,14 @@ class ModelSettings:
 
 
 @dataclass(frozen=True)
+class HyperparameterSearchSettings:
+    enabled: bool
+    strategy: str
+    candidates: Tuple[Dict[str, Any], ...]
+    result_report_name: str
+
+
+@dataclass(frozen=True)
 class TrainingSettings:
     validation_strategy: str
     validation_folds: int
@@ -171,6 +179,7 @@ class TrainingSettings:
     cv_report_name: str
     holdout_predictions_name: str
     oof_predictions_name: str
+    hyperparameter_search: HyperparameterSearchSettings
 
 
 @dataclass(frozen=True)
@@ -317,6 +326,21 @@ def _build_training_settings() -> TrainingSettings:
         cv_report_name="cross_validation_metrics.json",
         holdout_predictions_name="holdout_predictions.csv",
         oof_predictions_name="oof_predictions.csv",
+        hyperparameter_search=_build_hyperparameter_search_settings(),
+    )
+
+
+def _build_hyperparameter_search_settings() -> HyperparameterSearchSettings:
+    return HyperparameterSearchSettings(
+        enabled=True,
+        strategy="grid",
+        candidates=(
+            {"learning_rate": 0.08, "max_leaf_nodes": 31, "min_samples_leaf": 16, "max_iter": 800},
+            {"learning_rate": 0.06, "max_leaf_nodes": 55, "min_samples_leaf": 18, "max_iter": 950},
+            {"learning_rate": 0.05, "max_leaf_nodes": 45, "min_samples_leaf": 12, "max_iter": 1100},
+            {"learning_rate": 0.04, "max_leaf_nodes": 80, "min_samples_leaf": 10, "max_iter": 1300},
+        ),
+        result_report_name="hyperparameter_search.json",
     )
 
 
@@ -399,3 +423,9 @@ ensure_directories(
         CONFIG.paths.logs_dir,
     )
 )
+@dataclass(frozen=True)
+class HyperparameterSearchSettings:
+    enabled: bool
+    strategy: str
+    candidates: Tuple[Dict[str, Any], ...]
+    result_report_name: str

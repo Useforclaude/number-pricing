@@ -30,7 +30,7 @@ ESTIMATOR_REGISTRY: Dict[str, Type] = {
 }
 
 
-def build_estimator():
+def build_estimator(overrides: dict | None = None):
     settings = CONFIG.model
     estimator_cls = ESTIMATOR_REGISTRY.get(settings.estimator_name)
     if estimator_cls is None:
@@ -39,12 +39,16 @@ def build_estimator():
             f"Available options: {', '.join(sorted(ESTIMATOR_REGISTRY))}"
         )
 
+    params = settings.hyperparameters.copy()
+    if overrides:
+        params.update(overrides)
+
     LOGGER.info(
         "Initialising estimator %s with params %s",
         settings.estimator_name,
-        settings.hyperparameters,
+        params,
     )
-    estimator = estimator_cls(**settings.hyperparameters)
+    estimator = estimator_cls(**params)
 
     early_rounds = getattr(CONFIG.training, "early_stopping_rounds", None)
     if early_rounds and hasattr(estimator, "set_params"):
@@ -59,12 +63,12 @@ def build_estimator():
     return estimator
 
 
-def build_model_pipeline() -> Pipeline:
+def build_model_pipeline(overrides: dict | None = None) -> Pipeline:
     steps = [("features", NumberFeatureTransformer())]
 
     if CONFIG.model.feature_scaling.lower() == "standard":
         steps.append(("scaler", StandardScaler()))
 
-    steps.append(("regressor", build_estimator()))
+    steps.append(("regressor", build_estimator(overrides=overrides)))
     pipeline = Pipeline(steps=steps)
     return pipeline

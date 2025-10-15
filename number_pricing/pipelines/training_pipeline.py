@@ -38,8 +38,8 @@ class TrainingPipeline:
         self.config = CONFIG
         self.loader = DatasetLoader()
 
-    def _initialise_estimator(self):
-        estimator = build_model_pipeline()
+    def _initialise_estimator(self, overrides: Optional[Dict[str, object]] = None):
+        estimator = build_model_pipeline(overrides=overrides)
         if self.config.training.target_transform == "log1p":
             estimator = TransformedTargetRegressor(
                 regressor=estimator,
@@ -79,11 +79,16 @@ class TrainingPipeline:
         return KFold(n_splits=folds, shuffle=shuffle, random_state=seed), None
 
     def _cross_validate(
-        self, X: pd.DataFrame, y: pd.Series
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        estimator_overrides: Optional[Dict[str, object]] = None,
+        write_report: bool = True,
+        collect_oof: bool = True,
     ) -> Tuple[Dict[str, float], Optional[pd.DataFrame]]:
         splitter, strat_labels = self._build_cv_splitter(y)
         fold_metrics: List[Dict[str, float]] = []
-        store_oof = self.config.training.store_train_predictions
+        store_oof = self.config.training.store_train_predictions and collect_oof
         oof_predictions = np.full(shape=len(X), fill_value=np.nan) if store_oof else None
 
         split_iterator = (
@@ -91,7 +96,7 @@ class TrainingPipeline:
         )
 
         for fold_index, (train_idx, val_idx) in enumerate(split_iterator, start=1):
-            estimator = clone(self._initialise_estimator())
+            estimator = clone(self._initialise_estimator(estimator_overrides))
             X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
@@ -127,8 +132,9 @@ class TrainingPipeline:
             np.mean([fold["fit_time_seconds"] for fold in fold_metrics])
         )
 
-        report_path = self.config.paths.reports_dir / self.config.training.cv_report_name
-        save_json({"fold_metrics": fold_metrics, "aggregated": aggregated}, report_path)
+        if write_report:
+            report_path = self.config.paths.reports_dir / self.config.training.cv_report_name
+            save_json({"fold_metrics": fold_metrics, "aggregated": aggregated}, report_path)
         oof_frame: Optional[pd.DataFrame] = None
         if store_oof and oof_predictions is not None:
             oof_frame = pd.DataFrame(
@@ -156,10 +162,17 @@ class TrainingPipeline:
                 "Target values must be greater than -1 to use log1p transformation."
             )
 
-        cv_summary, oof_frame = self._cross_validate(X_train_df, y_train)
+        best_overrides = None
+        search_results = None
+        if self.config.training.hyperparameter_search.enabled:
+            best_overrides, search_results = self._hyperparameter_search(X_train_df, y_train)
+
+        cv_summary, oof_frame = self._cross_validate(
+            X_train_df, y_train, estimator_overrides=best_overrides
+        )
         LOGGER.info("Cross-validation summary: %s", cv_summary)
 
-        final_estimator = self._initialise_estimator()
+        final_estimator = self._initialise_estimator(best_overrides)
         LOGGER.info("Fitting final model on %s rows", len(X_train_df))
         final_estimator.fit(X_train_df, y_train)
 
@@ -181,8 +194,11 @@ class TrainingPipeline:
                 "environment": self.config.paths.environment_name,
                 "primary_metric": primary_metric,
                 "primary_metric_value": primary_value,
+                "best_hyperparameters": best_overrides or {},
             },
         }
+        if search_results is not None:
+            metrics_payload["hyperparameter_search"] = search_results
         metrics_path = self.config.paths.reports_dir / self.config.training.metrics_report_name
         save_json(metrics_payload, metrics_path)
 
@@ -216,3 +232,66 @@ class TrainingPipeline:
             holdout_predictions_path=str(predictions_path),
             oof_predictions_path=str(oof_path),
         )
+
+    def _hyperparameter_search(
+        self, X: pd.DataFrame, y: pd.Series
+    ) -> Tuple[Optional[Dict[str, object]], Dict[str, object]]:
+        search_cfg = self.config.training.hyperparameter_search
+        candidates = search_cfg.candidates
+        if not candidates:
+            LOGGER.info("Hyperparameter search enabled but no candidates provided.")
+            return None, {
+                "enabled": True,
+                "candidates_tested": [],
+                "best_candidate": None,
+            }
+
+        scoring_key = f"{self.config.training.scoring_metric}_mean"
+        minimize = self.config.training.minimize_metric
+        best_score = float("inf") if minimize else float("-inf")
+        best_params: Optional[Dict[str, float]] = None
+        evaluated: List[Dict[str, object]] = []
+
+        for idx, overrides in enumerate(candidates, start=1):
+            LOGGER.info("Evaluating hyperparameter candidate %s: %s", idx, overrides)
+            summary, _ = self._cross_validate(
+                X,
+                y,
+                estimator_overrides=overrides,
+                write_report=False,
+                collect_oof=False,
+            )
+            score = summary.get(scoring_key)
+            evaluated.append(
+                {
+                    "candidate_index": idx,
+                    "overrides": overrides,
+                    "metrics": summary,
+                }
+            )
+
+            if score is None:
+                LOGGER.warning(
+                    "Scoring key %s not found in metrics summary; skipping comparison.", scoring_key
+                )
+                continue
+
+            is_better = score < best_score if minimize else score > best_score
+            if is_better:
+                best_score = score
+                best_params = overrides
+
+        report_payload = {
+            "enabled": True,
+            "strategy": search_cfg.strategy,
+            "candidates_tested": evaluated,
+            "best_candidate": {
+                "params": best_params,
+                "score": best_score,
+                "scoring_key": scoring_key,
+            },
+        }
+        report_path = self.config.paths.reports_dir / search_cfg.result_report_name
+        save_json(report_payload, report_path)
+
+        return best_params, report_payload

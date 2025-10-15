@@ -126,6 +126,26 @@ class NumberFeatureTransformer(BaseEstimator, TransformerMixin):
             features["unique_digit_ratio"] = (
                 features["unique_digit_count"] / length if length else 0.0
             )
+            if length > 1:
+                diffs = np.diff(digit_array)
+                abs_diffs = np.abs(diffs)
+                features["mean_digit_diff"] = float(diffs.mean())
+                features["std_digit_diff"] = float(diffs.std(ddof=0))
+                features["mean_abs_digit_diff"] = float(abs_diffs.mean())
+                features["positive_diff_ratio"] = float(np.mean(diffs > 0))
+                features["zero_diff_ratio"] = float(np.mean(diffs == 0))
+                features["negative_diff_ratio"] = float(np.mean(diffs < 0))
+                features["sign_changes_count"] = float(
+                    np.sum(np.sign(diffs[:-1]) * np.sign(diffs[1:]) < 0)
+                )
+            else:
+                features["mean_digit_diff"] = 0.0
+                features["std_digit_diff"] = 0.0
+                features["mean_abs_digit_diff"] = 0.0
+                features["positive_diff_ratio"] = 0.0
+                features["zero_diff_ratio"] = 0.0
+                features["negative_diff_ratio"] = 0.0
+                features["sign_changes_count"] = 0.0
         else:
             features.update(
                 {
@@ -136,6 +156,13 @@ class NumberFeatureTransformer(BaseEstimator, TransformerMixin):
                     "digit_sum": 0.0,
                     "unique_digit_count": 0.0,
                     "unique_digit_ratio": 0.0,
+                    "mean_digit_diff": 0.0,
+                    "std_digit_diff": 0.0,
+                    "mean_abs_digit_diff": 0.0,
+                    "positive_diff_ratio": 0.0,
+                    "zero_diff_ratio": 0.0,
+                    "negative_diff_ratio": 0.0,
+                    "sign_changes_count": 0.0,
                 }
             )
 
@@ -161,6 +188,19 @@ class NumberFeatureTransformer(BaseEstimator, TransformerMixin):
         if self.config.features.include_ngram_counts:
             for n in self.config.features.ngram_sizes:
                 features.update(_ngram_statistics(number, n))
+            if length > 1:
+                pairs = [number[idx : idx + 2] for idx in range(length - 1)]
+                pair_counter = Counter(pairs)
+                features["unique_pair_count"] = float(len(pair_counter))
+                features["max_pair_frequency"] = float(max(pair_counter.values()))
+                features["pair_entropy"] = float(
+                    -sum((count / (length - 1)) * math.log(count / (length - 1) + 1e-12, 2)
+                         for count in pair_counter.values())
+                )
+            else:
+                features["unique_pair_count"] = 0.0
+                features["max_pair_frequency"] = 0.0
+                features["pair_entropy"] = 0.0
 
         if length:
             premium_count = float(
@@ -204,6 +244,23 @@ class NumberFeatureTransformer(BaseEstimator, TransformerMixin):
                     elif stat == "max":
                         features[f"{group_name}_max"] = float(group_array.max())
 
+            midpoint = length // 2
+            first_half = digits[:midpoint] if midpoint else digits
+            second_half = digits[midpoint:] if midpoint else digits
+            if first_half:
+                features["first_half_sum"] = float(sum(first_half))
+                features["first_half_mean"] = float(np.mean(first_half))
+            else:
+                features["first_half_sum"] = 0.0
+                features["first_half_mean"] = 0.0
+            if second_half:
+                features["second_half_sum"] = float(sum(second_half))
+                features["second_half_mean"] = float(np.mean(second_half))
+            else:
+                features["second_half_sum"] = 0.0
+                features["second_half_mean"] = 0.0
+            features["half_sum_difference"] = features["first_half_sum"] - features["second_half_sum"]
+
         if self.config.features.rolling_window_sizes and digits:
             digit_array = np.array(digits, dtype=float)
             for window in self.config.features.rolling_window_sizes:
@@ -217,5 +274,25 @@ class NumberFeatureTransformer(BaseEstimator, TransformerMixin):
                 features[f"rolling_mean_w{window}"] = float(rolling_sums.mean())
                 features[f"rolling_std_w{window}"] = float(rolling_sums.std(ddof=0))
 
-        return features
+        if length >= 3:
+            features["prefix3_value"] = float(int(number[:3]))
+            features["suffix3_value"] = float(int(number[-3:]))
+        else:
+            features["prefix3_value"] = 0.0
+            features["suffix3_value"] = 0.0
 
+        if length >= 4:
+            features["prefix4_value"] = float(int(number[:4]))
+            features["suffix4_value"] = float(int(number[-4:]))
+        else:
+            features["prefix4_value"] = 0.0
+            features["suffix4_value"] = 0.0
+
+        if length:
+            reversed_number = number[::-1]
+            features["is_suffix_same_as_prefix"] = float(number[:3] == number[-3:])
+            features["mirror_similarity"] = float(
+                sum(1 for a, b in zip(number, reversed_number) if a == b) / length
+            )
+
+        return features
