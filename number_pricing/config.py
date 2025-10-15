@@ -117,12 +117,12 @@ class DataSettings:
             "raw_dataset_filename": _resolve_dataset_filename("numberdata.csv"),
             "delimiter": ",",
             "encoding": "utf-8",
-            "id_column": "phone_number",
+            "id_column": "phone_num",
             "target_column": "price",
             "enforce_unique_ids": True,
             "valid_number_lengths": (10,),
             "drop_rows_with_missing_target": True,
-            "dtype_overrides": {"phone_number": "string"},
+            "dtype_overrides": {"phone_num": "string"},
             "cache_intermediate": True,
         }
 
@@ -423,9 +423,3 @@ ensure_directories(
         CONFIG.paths.logs_dir,
     )
 )
-@dataclass(frozen=True)
-class HyperparameterSearchSettings:
-    enabled: bool
-    strategy: str
-    candidates: Tuple[Dict[str, Any], ...]
-    result_report_name: str
