@@ -32,7 +32,7 @@ _DEFAULT_ENV_BASE_PATHS: Dict[str, Path] = {
     "colab": Path("/content/drive/MyDrive/number-ML"),
     "colab_ephemeral": Path("/content/number-ML"),
     "kaggle": Path("/kaggle/working"),
-    "paperspace": Path("/storage/number-ML"),
+    "paperspace": Path("/notebooks/number-pricing"),
 }
 
 
