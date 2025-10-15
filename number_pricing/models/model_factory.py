@@ -16,41 +16,10 @@ from sklearn.preprocessing import StandardScaler
 
 from number_pricing.config import CONFIG
 from number_pricing.features.feature_extractor import NumberFeatureTransformer
+from number_pricing.models._registry import instantiate_estimator
 from number_pricing.utils.logging_utils import get_logger
 
 LOGGER = get_logger(__name__)
-
-
-ESTIMATOR_REGISTRY: Dict[str, Type] = {
-    "hist_gradient_boosting": HistGradientBoostingRegressor,
-    "gradient_boosting": GradientBoostingRegressor,
-    "random_forest": RandomForestRegressor,
-    "extra_trees": ExtraTreesRegressor,
-    "ridge": Ridge,
-}
-
-
-def instantiate_estimator(name: str, params: Dict[str, object] | None = None):
-    estimator_cls = ESTIMATOR_REGISTRY.get(name)
-    if estimator_cls is None:
-        raise ValueError(
-            f"Unknown estimator '{name}'. "
-            f"Available options: {', '.join(sorted(ESTIMATOR_REGISTRY))}"
-        )
-
-    params = params or {}
-    LOGGER.info("Initialising estimator %s with params %s", name, params)
-    estimator = estimator_cls(**params)
-    early_rounds = getattr(CONFIG.training, "early_stopping_rounds", None)
-    if early_rounds and hasattr(estimator, "set_params"):
-        try:
-            estimator.set_params(n_iter_no_change=early_rounds)
-        except ValueError:
-            LOGGER.debug(
-                "Estimator %s does not support n_iter_no_change adjustment.",
-                name,
-            )
-    return estimator
 
 
 def build_estimator(overrides: dict | None = None):
@@ -63,18 +32,46 @@ def build_estimator(overrides: dict | None = None):
 
 def build_model_pipeline(overrides: dict | None = None):
     from number_pricing.models.ensemble import WeightedEnsembleRegressor
-
-    if CONFIG.model.use_ensemble:
-        return WeightedEnsembleRegressor(
-            members=CONFIG.model.ensemble_members,
-            feature_scaling=CONFIG.model.feature_scaling,
-            primary_overrides=overrides,
-        )
+    from sklearn.ensemble import StackingRegressor
 
     steps = [("features", NumberFeatureTransformer())]
 
     if CONFIG.model.feature_scaling.lower() == "standard":
         steps.append(("scaler", StandardScaler()))
+
+    if CONFIG.model.use_ensemble:
+        strategy = CONFIG.model.ensemble_strategy.lower()
+        if strategy == "weighted":
+            return WeightedEnsembleRegressor(
+                members=CONFIG.model.ensemble_members,
+                feature_scaling=CONFIG.model.feature_scaling,
+                primary_overrides=overrides,
+            )
+        if strategy == "stacking":
+            estimators = []
+            for idx, member in enumerate(CONFIG.model.ensemble_members):
+                name = member.get("name")
+                weight = member.get("weight", 1.0)  # for reference
+                hyperparams = dict(member.get("hyperparameters", {}))
+                if idx == 0 and overrides:
+                    hyperparams.update(overrides)
+                pipeline_steps = steps.copy()
+                pipeline_steps.append(
+                    ("regressor", instantiate_estimator(name, hyperparams))
+                )
+                estimators.append((f"{name}_{idx}", Pipeline(pipeline_steps)))
+
+            meta_cfg = CONFIG.model.stacking_meta
+            meta_estimator = instantiate_estimator(
+                meta_cfg["name"], dict(meta_cfg.get("params", {}))
+            )
+            return StackingRegressor(
+                estimators=estimators,
+                final_estimator=meta_estimator,
+                passthrough=meta_cfg.get("passthrough", False),
+                cv=CONFIG.training.validation_folds,
+                n_jobs=-1,
+            )
 
     steps.append(("regressor", build_estimator(overrides=overrides)))
     return Pipeline(steps=steps)

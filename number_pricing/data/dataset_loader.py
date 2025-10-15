@@ -51,6 +51,26 @@ class DatasetLoader:
         df[self.target_column] = pd.to_numeric(
             df[self.target_column], errors="coerce"
         ).astype(float)
+
+        if self.config.data.clip_target:
+            lower_q = self.config.data.clip_lower_quantile
+            upper_q = self.config.data.clip_upper_quantile
+            lower = df[self.target_column].quantile(lower_q)
+            upper = df[self.target_column].quantile(upper_q)
+            clip_mask = (df[self.target_column] < lower) | (df[self.target_column] > upper)
+            clipped = int(clip_mask.sum())
+            if clipped:
+                LOGGER.info(
+                    "Clipping %s target values outside quantiles %.3f - %.3f (%.2f - %.2f)",
+                    clipped,
+                    lower_q,
+                    upper_q,
+                    lower,
+                    upper,
+                )
+                df[self.target_column] = df[self.target_column].clip(lower, upper)
+            validation.clipped_targets = clipped
+
         return LoadedDataset(frame=df, validation=validation)
 
     @staticmethod

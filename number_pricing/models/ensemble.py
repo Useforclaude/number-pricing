@@ -10,7 +10,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from number_pricing.features.feature_extractor import NumberFeatureTransformer
-from number_pricing.models.model_factory import instantiate_estimator
+from number_pricing.models._registry import instantiate_estimator
 
 
 class WeightedEnsembleRegressor(BaseEstimator, RegressorMixin):

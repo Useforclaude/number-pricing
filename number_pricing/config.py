@@ -110,6 +110,9 @@ class DataSettings:
     drop_rows_with_missing_target: bool
     dtype_overrides: Dict[str, str]
     cache_intermediate: bool
+    clip_target: bool
+    clip_lower_quantile: float
+    clip_upper_quantile: float
 
     @staticmethod
     def defaults() -> Dict[str, Any]:
@@ -124,6 +127,9 @@ class DataSettings:
             "drop_rows_with_missing_target": True,
             "dtype_overrides": {"phone_num": "string"},
             "cache_intermediate": True,
+            "clip_target": True,
+            "clip_lower_quantile": 0.01,
+            "clip_upper_quantile": 0.99,
         }
 
 
@@ -167,7 +173,9 @@ class ModelSettings:
     feature_scaling: str
     artifact_name: str
     use_ensemble: bool
+    ensemble_strategy: str
     ensemble_members: Tuple[Dict[str, Any], ...]
+    stacking_meta: Dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -599,6 +607,7 @@ def _build_model_settings() -> ModelSettings:
         feature_scaling="none",
         artifact_name="hist_gradient_boosting_number_pricing.joblib",
         use_ensemble=True,
+        ensemble_strategy="stacking",
         ensemble_members=(
             {
                 "name": "hist_gradient_boosting",
@@ -641,6 +650,11 @@ def _build_model_settings() -> ModelSettings:
                 },
             },
         ),
+        stacking_meta={
+            "name": "ridge",
+            "params": {"alpha": 1.0},
+            "passthrough": False,
+        },
     )
 
 

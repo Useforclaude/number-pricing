@@ -19,6 +19,7 @@ class ValidationResult:
     removed_invalid_length: int
     removed_missing_target: int
     dropped_duplicates: int
+    clipped_targets: int = 0
 
     def summary(self) -> Dict[str, int]:
         return {
@@ -26,6 +27,7 @@ class ValidationResult:
             "removed_invalid_length": self.removed_invalid_length,
             "removed_missing_target": self.removed_missing_target,
             "dropped_duplicates": self.dropped_duplicates,
+            "clipped_targets": self.clipped_targets,
         }
 
 
@@ -79,4 +81,3 @@ def validate_and_clean_dataset(df: pd.DataFrame) -> ValidationResult:
         removed_missing_target=removed_missing_target,
         dropped_duplicates=dropped_duplicates,
     )
-
