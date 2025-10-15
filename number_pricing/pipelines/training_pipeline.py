@@ -11,6 +11,7 @@ import pandas as pd
 from sklearn.base import clone
 from sklearn.compose import TransformedTargetRegressor
 from sklearn.model_selection import KFold, StratifiedKFold
+from tqdm import tqdm
 
 from number_pricing.config import CONFIG
 from number_pricing.data.dataset_loader import DatasetLoader
@@ -95,7 +96,11 @@ class TrainingPipeline:
             splitter.split(X, strat_labels) if strat_labels is not None else splitter.split(X)
         )
 
-        for fold_index, (train_idx, val_idx) in enumerate(split_iterator, start=1):
+        # Progress bar for CV folds
+        total_folds = splitter.get_n_splits()
+        pbar = tqdm(enumerate(split_iterator, start=1), total=total_folds, desc="Cross-Validation", unit="fold")
+
+        for fold_index, (train_idx, val_idx) in pbar:
             estimator = clone(self._initialise_estimator(estimator_overrides))
             X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
@@ -111,6 +116,9 @@ class TrainingPipeline:
             metrics["fold"] = fold_index
             metrics["fit_time_seconds"] = elapsed
             fold_metrics.append(metrics)
+
+            # Update progress bar with current R²
+            pbar.set_postfix({"R²": f"{metrics.get('r2', 0):.4f}", "RMSE": f"{metrics.get('rmse', 0):.0f}"})
             LOGGER.info("Fold %s metrics: %s", fold_index, metrics)
 
             if store_oof and oof_predictions is not None:
@@ -225,6 +233,9 @@ class TrainingPipeline:
         model_path = self.config.paths.models_dir / self.config.model.artifact_name
         save_model(final_estimator, model_path)
 
+        # Print beautiful summary
+        self._print_training_summary(cv_summary, holdout_metrics, best_overrides, str(model_path))
+
         return TrainingArtifacts(
             model_path=str(model_path),
             metrics_path=str(metrics_path),
@@ -252,7 +263,11 @@ class TrainingPipeline:
         best_params: Optional[Dict[str, float]] = None
         evaluated: List[Dict[str, object]] = []
 
-        for idx, overrides in enumerate(candidates, start=1):
+        # Progress bar for hyperparameter search
+        pbar = tqdm(enumerate(candidates, start=1), total=len(candidates), desc="Hyperparameter Search", unit="config")
+
+        for idx, overrides in pbar:
+            pbar.set_postfix({"config": f"{idx}/{len(candidates)}"})
             LOGGER.info("Evaluating hyperparameter candidate %s: %s", idx, overrides)
             summary, _ = self._cross_validate(
                 X,
@@ -280,6 +295,7 @@ class TrainingPipeline:
             if is_better:
                 best_score = score
                 best_params = overrides
+                pbar.set_postfix({"config": f"{idx}/{len(candidates)}", "best_score": f"{best_score:.4f}"})
 
         report_payload = {
             "enabled": True,
@@ -295,3 +311,64 @@ class TrainingPipeline:
         save_json(report_payload, report_path)
 
         return best_params, report_payload
+
+    def _print_training_summary(
+        self,
+        cv_summary: Dict[str, float],
+        holdout_metrics: Dict[str, float],
+        best_params: Optional[Dict[str, object]],
+        model_path: str,
+    ) -> None:
+        """Print beautiful training summary."""
+        print("\n" + "=" * 80)
+        print("🎉 TRAINING COMPLETE!".center(80))
+        print("=" * 80)
+
+        # Cross-Validation Results
+        print("\n📊 Cross-Validation Results (5-Fold):")
+        print("-" * 80)
+        r2_mean = cv_summary.get("r2_mean", 0)
+        r2_std = cv_summary.get("r2_std", 0)
+        rmse_mean = cv_summary.get("rmse_mean", 0)
+        rmse_std = cv_summary.get("rmse_std", 0)
+        mae_mean = cv_summary.get("mae_mean", 0)
+        mae_std = cv_summary.get("mae_std", 0)
+
+        print(f"  R² Score:    {r2_mean:8.4f} ± {r2_std:.4f}")
+        print(f"  RMSE:        {rmse_mean:8.0f} ± {rmse_std:.0f}")
+        print(f"  MAE:         {mae_mean:8.0f} ± {mae_std:.0f}")
+
+        # Hold-out Test Results
+        print("\n🎯 Hold-out Test Results:")
+        print("-" * 80)
+        print(f"  R² Score:    {holdout_metrics.get('r2', 0):8.4f}")
+        print(f"  RMSE:        {holdout_metrics.get('rmse', 0):8.0f}")
+        print(f"  MAE:         {holdout_metrics.get('mae', 0):8.0f}")
+        print(f"  MAPE:        {holdout_metrics.get('mape', 0):8.2f}%")
+
+        # Best Hyperparameters
+        if best_params:
+            print("\n⚙️  Best Hyperparameters:")
+            print("-" * 80)
+            for key, value in best_params.items():
+                print(f"  {key:20s}: {value}")
+
+        # Model Saved
+        print("\n💾 Model Saved:")
+        print("-" * 80)
+        print(f"  {model_path}")
+
+        # Performance Grade
+        print("\n📈 Performance Grade:")
+        print("-" * 80)
+        if r2_mean >= 0.85:
+            grade = "🏆 EXCELLENT (R² ≥ 0.85)"
+        elif r2_mean >= 0.70:
+            grade = "✅ GOOD (R² ≥ 0.70)"
+        elif r2_mean >= 0.50:
+            grade = "⚠️  MODERATE (R² ≥ 0.50)"
+        else:
+            grade = "❌ NEEDS IMPROVEMENT (R² < 0.50)"
+        print(f"  {grade}")
+
+        print("\n" + "=" * 80 + "\n")
