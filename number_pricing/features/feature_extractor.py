@@ -1,4 +1,4 @@
-"""Feature extraction for phone number strings."""
+"""Feature extraction for phone number strings with rich domain signals."""
 
 from __future__ import annotations
 
@@ -70,6 +70,65 @@ def _ngram_statistics(number: str, n: int) -> Dict[str, float]:
     }
 
 
+def _score_suffix(number: str, weights: Dict[str, float]) -> float:
+    if not number:
+        return 0.0
+    lengths = sorted({len(k) for k in weights}, reverse=True)
+    for length in lengths:
+        if length > len(number):
+            continue
+        candidate = number[-length:]
+        if candidate in weights:
+            return float(weights[candidate])
+    return 0.0
+
+
+def _score_prefix(number: str, weights: Dict[str, float]) -> float:
+    if not number:
+        return 0.0
+    lengths = sorted({len(k) for k in weights}, reverse=True)
+    for length in lengths:
+        if length > len(number):
+            continue
+        candidate = number[:length]
+        if candidate in weights:
+            return float(weights[candidate])
+    return 0.0
+
+
+def _score_sequences(number: str, mapping: Dict[str, float]) -> float:
+    total = 0.0
+    for seq, score in mapping.items():
+        if seq in number:
+            total += float(score)
+    return total
+
+
+def _score_pattern_occurrences(number: str, mapping: Dict[str, float]) -> float:
+    total = 0.0
+    for pattern, score in mapping.items():
+        plen = len(pattern)
+        if plen == 0 or plen > len(number):
+            continue
+        occurrences = sum(
+            1 for idx in range(len(number) - plen + 1) if number[idx : idx + plen] == pattern
+        )
+        total += occurrences * float(score)
+    return total
+
+
+def _compute_entropy(number: str) -> float:
+    if not number:
+        return 0.0
+    freq = Counter(number)
+    total = len(number)
+    entropy = 0.0
+    for count in freq.values():
+        prob = count / total
+        entropy -= prob * math.log(prob + 1e-12, 2)
+    return entropy
+
+
 class NumberFeatureTransformer(BaseEstimator, TransformerMixin):
     """Build model-ready numerical features from raw phone numbers."""
 
@@ -110,6 +169,19 @@ class NumberFeatureTransformer(BaseEstimator, TransformerMixin):
             "is_palindrome": float(number == number[::-1]),
         }
 
+        power_weights = self.config.features.power_weights
+        special_pair_scores = self.config.features.special_pair_scores
+        premium_suffix_weights = self.config.features.premium_suffix_weights
+        premium_prefix_weights = self.config.features.premium_prefix_weights
+        ending_scores = self.config.features.ending_premium_scores
+        lucky_sequences = self.config.features.lucky_sequence_scores
+        double_scores = self.config.features.double_scores
+        triple_scores = self.config.features.triple_scores
+        quad_scores = self.config.features.quad_scores
+        high_value_digits = set(self.config.features.high_value_digits)
+        rare_digits = set(self.config.features.rare_digits)
+        mystical_pairs = self.config.features.mystical_pairs
+
         if digits:
             digit_array = np.array(digits, dtype=float)
             for stat in self.config.features.aggregation_stats:
@@ -126,6 +198,13 @@ class NumberFeatureTransformer(BaseEstimator, TransformerMixin):
             features["unique_digit_ratio"] = (
                 features["unique_digit_count"] / length if length else 0.0
             )
+
+            power_values = [power_weights.get(str(d), 0.0) for d in digits]
+            power_sum = float(sum(power_values))
+            features["power_sum"] = power_sum
+            features["power_mean"] = power_sum / length if length else 0.0
+            features["power_std"] = float(np.std(power_values, ddof=0))
+
             if length > 1:
                 diffs = np.diff(digit_array)
                 abs_diffs = np.abs(diffs)
@@ -163,6 +242,9 @@ class NumberFeatureTransformer(BaseEstimator, TransformerMixin):
                     "zero_diff_ratio": 0.0,
                     "negative_diff_ratio": 0.0,
                     "sign_changes_count": 0.0,
+                    "power_sum": 0.0,
+                    "power_mean": 0.0,
+                    "power_std": 0.0,
                 }
             )
 
@@ -225,6 +307,94 @@ class NumberFeatureTransformer(BaseEstimator, TransformerMixin):
             features["unlucky_digit_count"] = unlucky_count
             features["unlucky_digit_ratio"] = unlucky_count / length if length else 0.0
 
+            high_value_count = float(sum(1 for d in number if d in high_value_digits))
+            features["high_value_digit_ratio"] = high_value_count / length
+            tail_len = min(4, length)
+            if tail_len:
+                tail = number[-tail_len:]
+                features["high_value_tail_ratio"] = float(
+                    sum(1 for d in tail if d in high_value_digits) / tail_len
+                )
+            else:
+                features["high_value_tail_ratio"] = 0.0
+
+            cluster_lengths: List[int] = []
+            current = 0
+            for d in number:
+                if d in high_value_digits:
+                    current += 1
+                else:
+                    if current:
+                        cluster_lengths.append(current)
+                    current = 0
+            if current:
+                cluster_lengths.append(current)
+            cluster_score = float(max(cluster_lengths)) if cluster_lengths else 0.0
+            if length >= 2 and number[-1] in high_value_digits and number[-2] in high_value_digits:
+                cluster_score += 1.5
+            features["high_value_cluster_score"] = cluster_score
+
+            rare_count = float(sum(1 for d in number if d in rare_digits))
+            features["rare_digit_ratio"] = rare_count / length
+
+            special_pair_score = 0.0
+            mystical_score = 0.0
+            negative_pair_count = 0.0
+            for idx in range(length - 1):
+                pair = number[idx : idx + 2]
+                special_pair_score += special_pair_scores.get(pair, 0.0)
+                mystical_score += mystical_pairs.get(pair, 0.0)
+                if pair in self.config.features.negative_pairs:
+                    negative_pair_count += 1.0
+            features["special_pair_score"] = special_pair_score
+            features["special_pair_average"] = (
+                special_pair_score / (length - 1) if length > 1 else 0.0
+            )
+            features["mystical_pair_score"] = mystical_score
+            features["negative_pair_count"] = negative_pair_count
+
+            features["premium_suffix_score"] = _score_suffix(number, premium_suffix_weights)
+            features["premium_prefix_score"] = _score_prefix(number, premium_prefix_weights)
+            features["ending_score"] = _score_suffix(number, ending_scores)
+            features["sequence_score"] = _score_sequences(number, lucky_sequences)
+            features["double_pattern_score"] = _score_pattern_occurrences(number, double_scores)
+            features["triple_pattern_score"] = _score_pattern_occurrences(number, triple_scores)
+            features["quad_pattern_score"] = _score_pattern_occurrences(number, quad_scores)
+            features["digit_entropy"] = float(_compute_entropy(number))
+            features["pair_diversity_score"] = (
+                features.get("unique_pair_count", 0.0) / (length - 1) if length > 1 else 0.0
+            )
+        else:
+            features.update(
+                {
+                    "premium_pair_count": 0.0,
+                    "premium_pair_density": 0.0,
+                    "penalty_pair_count": 0.0,
+                    "penalty_pair_density": 0.0,
+                    "lucky_digit_count": 0.0,
+                    "lucky_digit_ratio": 0.0,
+                    "unlucky_digit_count": 0.0,
+                    "unlucky_digit_ratio": 0.0,
+                    "high_value_digit_ratio": 0.0,
+                    "high_value_tail_ratio": 0.0,
+                    "high_value_cluster_score": 0.0,
+                    "rare_digit_ratio": 0.0,
+                    "special_pair_score": 0.0,
+                    "special_pair_average": 0.0,
+                    "mystical_pair_score": 0.0,
+                    "negative_pair_count": 0.0,
+                    "premium_suffix_score": 0.0,
+                    "premium_prefix_score": 0.0,
+                    "ending_score": 0.0,
+                    "sequence_score": 0.0,
+                    "double_pattern_score": 0.0,
+                    "triple_pattern_score": 0.0,
+                    "quad_pattern_score": 0.0,
+                    "digit_entropy": 0.0,
+                    "pair_diversity_score": 0.0,
+                }
+            )
+
         if self.config.features.include_position_scores and digits:
             for group_name, positions in self.config.features.positional_groups.items():
                 group_values = [
@@ -259,7 +429,9 @@ class NumberFeatureTransformer(BaseEstimator, TransformerMixin):
             else:
                 features["second_half_sum"] = 0.0
                 features["second_half_mean"] = 0.0
-            features["half_sum_difference"] = features["first_half_sum"] - features["second_half_sum"]
+            features["half_sum_difference"] = (
+                features["first_half_sum"] - features["second_half_sum"]
+            )
 
         if self.config.features.rolling_window_sizes and digits:
             digit_array = np.array(digits, dtype=float)
@@ -294,5 +466,17 @@ class NumberFeatureTransformer(BaseEstimator, TransformerMixin):
             features["mirror_similarity"] = float(
                 sum(1 for a, b in zip(number, reversed_number) if a == b) / length
             )
+
+        features["premium_signal_strength"] = (
+            features.get("premium_suffix_score", 0.0)
+            + features.get("special_pair_score", 0.0)
+            + features.get("sequence_score", 0.0)
+        )
+        features["power_x_ending"] = features.get("power_sum", 0.0) * features.get(
+            "ending_score", 0.0
+        )
+        features["power_x_special"] = features.get("power_sum", 0.0) * features.get(
+            "special_pair_score", 0.0
+        )
 
         return features
