@@ -30,26 +30,17 @@ ESTIMATOR_REGISTRY: Dict[str, Type] = {
 }
 
 
-def build_estimator(overrides: dict | None = None):
-    settings = CONFIG.model
-    estimator_cls = ESTIMATOR_REGISTRY.get(settings.estimator_name)
+def instantiate_estimator(name: str, params: Dict[str, object] | None = None):
+    estimator_cls = ESTIMATOR_REGISTRY.get(name)
     if estimator_cls is None:
         raise ValueError(
-            f"Unknown estimator '{settings.estimator_name}'. "
+            f"Unknown estimator '{name}'. "
             f"Available options: {', '.join(sorted(ESTIMATOR_REGISTRY))}"
         )
 
-    params = settings.hyperparameters.copy()
-    if overrides:
-        params.update(overrides)
-
-    LOGGER.info(
-        "Initialising estimator %s with params %s",
-        settings.estimator_name,
-        params,
-    )
+    params = params or {}
+    LOGGER.info("Initialising estimator %s with params %s", name, params)
     estimator = estimator_cls(**params)
-
     early_rounds = getattr(CONFIG.training, "early_stopping_rounds", None)
     if early_rounds and hasattr(estimator, "set_params"):
         try:
@@ -57,18 +48,33 @@ def build_estimator(overrides: dict | None = None):
         except ValueError:
             LOGGER.debug(
                 "Estimator %s does not support n_iter_no_change adjustment.",
-                settings.estimator_name,
+                name,
             )
-
     return estimator
 
 
-def build_model_pipeline(overrides: dict | None = None) -> Pipeline:
+def build_estimator(overrides: dict | None = None):
+    settings = CONFIG.model
+    params = settings.hyperparameters.copy()
+    if overrides:
+        params.update(overrides)
+    return instantiate_estimator(settings.estimator_name, params)
+
+
+def build_model_pipeline(overrides: dict | None = None):
+    from number_pricing.models.ensemble import WeightedEnsembleRegressor
+
+    if CONFIG.model.use_ensemble:
+        return WeightedEnsembleRegressor(
+            members=CONFIG.model.ensemble_members,
+            feature_scaling=CONFIG.model.feature_scaling,
+            primary_overrides=overrides,
+        )
+
     steps = [("features", NumberFeatureTransformer())]
 
     if CONFIG.model.feature_scaling.lower() == "standard":
         steps.append(("scaler", StandardScaler()))
 
     steps.append(("regressor", build_estimator(overrides=overrides)))
-    pipeline = Pipeline(steps=steps)
-    return pipeline
+    return Pipeline(steps=steps)

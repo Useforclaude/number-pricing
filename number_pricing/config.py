@@ -166,6 +166,8 @@ class ModelSettings:
     calibration_cv: int
     feature_scaling: str
     artifact_name: str
+    use_ensemble: bool
+    ensemble_members: Tuple[Dict[str, Any], ...]
 
 
 @dataclass(frozen=True)
@@ -596,6 +598,49 @@ def _build_model_settings() -> ModelSettings:
         calibration_cv=3,
         feature_scaling="none",
         artifact_name="hist_gradient_boosting_number_pricing.joblib",
+        use_ensemble=True,
+        ensemble_members=(
+            {
+                "name": "hist_gradient_boosting",
+                "weight": 0.55,
+                "hyperparameters": {
+                    "max_depth": None,
+                    "min_samples_leaf": 20,
+                    "max_leaf_nodes": 55,
+                    "learning_rate": 0.06,
+                    "l2_regularization": 0.0,
+                    "max_iter": 950,
+                    "validation_fraction": 0.1,
+                    "n_iter_no_change": 30,
+                    "tol": 1e-4,
+                },
+            },
+            {
+                "name": "gradient_boosting",
+                "weight": 0.25,
+                "hyperparameters": {
+                    "n_estimators": 800,
+                    "learning_rate": 0.05,
+                    "max_depth": 5,
+                    "min_samples_split": 4,
+                    "min_samples_leaf": 2,
+                    "subsample": 0.9,
+                    "max_features": "sqrt",
+                },
+            },
+            {
+                "name": "extra_trees",
+                "weight": 0.20,
+                "hyperparameters": {
+                    "n_estimators": 600,
+                    "max_depth": None,
+                    "min_samples_split": 2,
+                    "min_samples_leaf": 1,
+                    "max_features": 0.8,
+                    "bootstrap": False,
+                },
+            },
+        ),
     )
 
 
@@ -626,10 +671,14 @@ def _build_hyperparameter_search_settings() -> HyperparameterSearchSettings:
         enabled=True,
         strategy="grid",
         candidates=(
-            {"learning_rate": 0.08, "max_leaf_nodes": 31, "min_samples_leaf": 16, "max_iter": 800},
-            {"learning_rate": 0.06, "max_leaf_nodes": 55, "min_samples_leaf": 18, "max_iter": 950},
-            {"learning_rate": 0.05, "max_leaf_nodes": 45, "min_samples_leaf": 12, "max_iter": 1100},
-            {"learning_rate": 0.04, "max_leaf_nodes": 80, "min_samples_leaf": 10, "max_iter": 1300},
+            {"learning_rate": 0.10, "max_leaf_nodes": 24, "min_samples_leaf": 18, "max_iter": 600},
+            {"learning_rate": 0.08, "max_leaf_nodes": 36, "min_samples_leaf": 14, "max_iter": 850},
+            {"learning_rate": 0.07, "max_leaf_nodes": 48, "min_samples_leaf": 12, "max_iter": 1000},
+            {"learning_rate": 0.06, "max_leaf_nodes": 55, "min_samples_leaf": 18, "max_iter": 1100},
+            {"learning_rate": 0.05, "max_leaf_nodes": 68, "min_samples_leaf": 10, "max_iter": 1300},
+            {"learning_rate": 0.045, "max_leaf_nodes": 85, "min_samples_leaf": 8, "max_iter": 1500},
+            {"learning_rate": 0.04, "max_leaf_nodes": 95, "min_samples_leaf": 6, "max_iter": 1700},
+            {"learning_rate": 0.035, "max_leaf_nodes": 120, "min_samples_leaf": 5, "max_iter": 2000},
         ),
         result_report_name="hyperparameter_search.json",
     )
