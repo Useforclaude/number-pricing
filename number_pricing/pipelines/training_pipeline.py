@@ -86,6 +86,7 @@ class TrainingPipeline:
         estimator_overrides: Optional[Dict[str, object]] = None,
         write_report: bool = True,
         collect_oof: bool = True,
+        pbar: Optional[tqdm] = None,
     ) -> Tuple[Dict[str, float], Optional[pd.DataFrame]]:
         splitter, strat_labels = self._build_cv_splitter(y)
         fold_metrics: List[Dict[str, float]] = []
@@ -96,11 +97,7 @@ class TrainingPipeline:
             splitter.split(X, strat_labels) if strat_labels is not None else splitter.split(X)
         )
 
-        # Progress bar for CV folds
-        total_folds = splitter.get_n_splits()
-        pbar = tqdm(enumerate(split_iterator, start=1), total=total_folds, desc="Cross-Validation", unit="fold")
-
-        for fold_index, (train_idx, val_idx) in pbar:
+        for fold_index, (train_idx, val_idx) in enumerate(split_iterator, start=1):
             estimator = clone(self._initialise_estimator(estimator_overrides))
             X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
@@ -117,8 +114,11 @@ class TrainingPipeline:
             metrics["fit_time_seconds"] = elapsed
             fold_metrics.append(metrics)
 
-            # Update progress bar with current R²
-            pbar.set_postfix({"R²": f"{metrics.get('r2', 0):.4f}", "RMSE": f"{metrics.get('rmse', 0):.0f}"})
+            # Update external progress bar if provided
+            if pbar is not None:
+                pbar.update(1)
+                pbar.set_postfix({"R²": f"{metrics.get('r2', 0):.4f}", "RMSE": f"{metrics.get('rmse', 0):.0f}"})
+
             LOGGER.info("Fold %s metrics: %s", fold_index, metrics)
 
             if store_oof and oof_predictions is not None:
@@ -175,9 +175,14 @@ class TrainingPipeline:
         if self.config.training.hyperparameter_search.enabled:
             best_overrides, search_results = self._hyperparameter_search(X_train_df, y_train)
 
+        # Final CV with best hyperparameters (with progress bar)
+        print("\n🎯 Final cross-validation with best hyperparameters...")
+        folds = self.config.training.validation_folds
+        final_pbar = tqdm(total=folds, desc="Final CV", unit="fold", ncols=100)
         cv_summary, oof_frame = self._cross_validate(
-            X_train_df, y_train, estimator_overrides=best_overrides
+            X_train_df, y_train, estimator_overrides=best_overrides, pbar=final_pbar
         )
+        final_pbar.close()
         LOGGER.info("Cross-validation summary: %s", cv_summary)
 
         final_estimator = self._initialise_estimator(best_overrides)
@@ -263,18 +268,24 @@ class TrainingPipeline:
         best_params: Optional[Dict[str, float]] = None
         evaluated: List[Dict[str, object]] = []
 
-        # Progress bar for hyperparameter search
-        pbar = tqdm(enumerate(candidates, start=1), total=len(candidates), desc="Hyperparameter Search", unit="config")
+        # Calculate total steps: hyperparameter configs × CV folds
+        folds = self.config.training.validation_folds
+        total_steps = len(candidates) * folds
 
-        for idx, overrides in pbar:
-            pbar.set_postfix({"config": f"{idx}/{len(candidates)}"})
-            LOGGER.info("Evaluating hyperparameter candidate %s: %s", idx, overrides)
+        # Single progress bar for entire training
+        pbar = tqdm(total=total_steps, desc="Training Progress", unit="fold", ncols=100)
+
+        for idx, overrides in enumerate(candidates, start=1):
+            LOGGER.info("Evaluating hyperparameter candidate %s/%s: %s", idx, len(candidates), overrides)
+            pbar.set_description(f"Config {idx}/{len(candidates)}")
+
             summary, _ = self._cross_validate(
                 X,
                 y,
                 estimator_overrides=overrides,
                 write_report=False,
                 collect_oof=False,
+                pbar=pbar,  # Pass progress bar to update per fold
             )
             score = summary.get(scoring_key)
             evaluated.append(
@@ -295,7 +306,8 @@ class TrainingPipeline:
             if is_better:
                 best_score = score
                 best_params = overrides
-                pbar.set_postfix({"config": f"{idx}/{len(candidates)}", "best_score": f"{best_score:.4f}"})
+
+        pbar.close()
 
         report_payload = {
             "enabled": True,
